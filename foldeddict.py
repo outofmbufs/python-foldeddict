@@ -72,28 +72,6 @@ class FoldedDict(MutableMapping):
         except AttributeError:      # i.e., it's not a string
             return key
 
-    # Methods _getpreserved and _removepreserved abstract the storage for
-    # the association between a canonicalkey and its preservedkey.
-    # In most cases these do not need to be overridden, but see
-    # the example subclass CanonFolder for one reason for doing so.
-    def _getpreserved(self, key):
-        """Return the 'preservedkey' for key.
-
-        If no preservedkey entry exists yet for canonicalkey(key), make one.
-        """
-        canon = self.canonicalkey(key)
-        try:
-            return self.__preserves[canon]
-        except AttributeError:    # this is how __preserves gets initialized
-            self.__preserves = {canon: key}
-        except KeyError:
-            self.__preserves[canon] = key
-        return self.__preserves[canon]
-
-    def _removepreserved(self, key):
-        """Remove the preservedkey associated with 'key'."""
-        del self.__preserves[self.canonicalkey(key)]
-
     def __init__(self, *args, **kwargs):
         # There's quite a few ways dict() takes arguments, so this
         # uses a two-step initialization process:
@@ -104,31 +82,20 @@ class FoldedDict(MutableMapping):
         #
         # NOTE: The semantics of (ill-advised) initializations with
         #       multiple equivalent keys (i.e., that will fold together
-        #       in step 2) are defined as working the way THIS works.
+        #       in step 2) are 'undefined' ... but work this way:
         xd = dict(*args, **kwargs)
         self.__dict = dict()
         for k, v in xd.items():
             self[k] = v
 
     def __getitem__(self, key):
-        # this is a bit over-careful, but if key is unknown, this carefully
-        # ensures no preservedkey is created.  Thus, a subsequent (valid)
-        # access of key will create the preservedkey AT THAT TIME, NOT NOW.
-        try:
-            return self.__dict[self._getpreserved(key)]
-        except KeyError:
-            self._removepreserved(key)   # _getpreserved just made it
-            raise
+        return self.__dict[self._preservedkey(key)]
 
     def __setitem__(self, key, val):
-        self.__dict[self._getpreserved(key)] = val
+        self.__dict[self._savekey(key)] = val
 
     def __delitem__(self, key):
-        # Same as __getitem__, this carefully avoids preservedkey pollution.
-        try:
-            del self.__dict[self._getpreserved(key)]
-        finally:
-            self._removepreserved(key)
+        del self.__dict[self._delkey(key)]
 
     def __iter__(self):
         return self.__dict.__iter__()
@@ -141,10 +108,52 @@ class FoldedDict(MutableMapping):
         # and compare that way. Otherwise ... best of luck with the
         # underlying == method.
         try:
-            oc = {other.canonicalkey(k): other[k] for k in other}
-            return {self.canonicalkey(k): self[k] for k in self.__dict} == oc
+            oc = {other.canonicalkey(k): v for k, v in other.items()}
+            return {self.canonicalkey(k): v for k, v in self.items()} == oc
         except AttributeError:
             return self.__dict == other
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}({self.__dict})"
+
+    def copy(self):
+        """Shallow copy"""
+        # MutableMapping doesn't provide this?? huh.
+        return self.__class__(self)
+
+    # The _preservedkey, _savekey, and _delkey methods abstract
+    # management of the preserved key. Generally, they don't
+    # need to be overridden and canonicalkey() suffices.
+    # But see, for example, CanonFolder, and DKFoldedDict
+    # for examples of what can be done overriding these methods.
+    def _preservedkey(self, key):
+        """Return the preservedkey for 'key' or raise KeyError."""
+        try:
+            return self.__preserves[self.canonicalkey(key)]
+        except AttributeError:
+            # Note that __preserves isn't initialized until the
+            # first time something is set, so this is just another
+            # form of "key not found" ... convert it to that.
+            raise KeyError(key) from None
+
+    def _savekey(self, key):
+        """Return the preservedkey if it exists, or set it (and return it)."""
+        canon = self.canonicalkey(key)
+        try:
+            return self.__preserves[canon]
+        except AttributeError:
+            # this is where __preserves gets initialized (!)
+            self.__preserves = {canon: key}
+        except KeyError:
+            self.__preserves[canon] = key
+        return key
+
+    def _delkey(self, key):
+        """Delete the preserved key (and return it!)."""
+        canon = self.canonicalkey(key)
+        p = self.__preserves[canon]
+        del self.__preserves[canon]
+        return p
 
 
 # this subclass uses the canonicalkey() as the preservedkey. This
@@ -153,11 +162,18 @@ class FoldedDict(MutableMapping):
 # would be important for the preservedkey value to be predictable/canonical
 # instead of preserving whatever form was first seen for each key.
 class CanonFolder(FoldedDict):
-    def _getpreserved(self, key):
+    def _preservedkey(self, key):
         return self.canonicalkey(key)
+    _savekey = _preservedkey
+    _delkey = _preservedkey
 
-    def _removepreserved(self, key):
-        pass
+
+# In this variant, the most recent key used to SET an element is preserved.
+class DKFoldedDict(FoldedDict):
+    def _savekey(self, key):
+        if key in self:
+            del self[key]     # so the set will preserve THIS key
+        return super()._savekey(key)
 
 
 # This is probably not useful but shows an example alternate canonicalkey()
@@ -329,5 +345,17 @@ if __name__ == "__main__":
             d[(3, 2, 1)] = 'bar'
             self.assertEqual(len(d), 1)
             self.assertEqual(d[(2, 3, 1)], 'bar')
+
+        def test_DK1(self):
+            # test the dynamic key where the preserved key is always
+            # whatever key was used last to SET a value.
+            d = DKFoldedDict()
+            d['cloWN'] = 'boZO'
+            self.assertEqual(d['clown'], 'boZO')
+            self.assertEqual(list(d.keys()), ['cloWN'])
+
+            d['CLOwn'] = 'BOzo'
+            self.assertEqual(d['clown'], 'BOzo')
+            self.assertEqual(list(d.keys()), ['CLOwn'])
 
     unittest.main()
