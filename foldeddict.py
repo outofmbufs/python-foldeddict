@@ -73,29 +73,30 @@ class FoldedDict(MutableMapping):
             return key
 
     def __init__(self, *args, **kwargs):
-        # There's quite a few ways dict() takes arguments, so this
-        # uses a two-step initialization process:
-        #  1) Use dict() to make a regular dict to figure all that out.
-        #  2) Iterate that dict() and use self.__setitem__ to put each
-        #     entry in place. This causes appropriate key foldings and
-        #     (of course) creates corresponding preservedkey mappings.
+        self.__preserves = {}
+        self.__dict = {}
+
+        # To support *every* form of dict() arguments... use dict()!
+        #    ... i.e., make a temporary dictionary from the arguments
+        #        and then initialize self by iterating those results.
         #
         # NOTE: The semantics of (ill-advised) initializations with
         #       multiple equivalent keys (i.e., that will fold together
         #       in step 2) are 'undefined' ... but work this way:
-        xd = dict(*args, **kwargs)
-        self.__dict = dict()
-        for k, v in xd.items():
+        for k, v in dict(*args, **kwargs).items():
             self[k] = v
 
     def __getitem__(self, key):
-        return self.__dict[self._preservedkey(key)]
+        return self.__dict[self.__preserves[self.canonicalkey(key)]]
 
     def __setitem__(self, key, val):
         self.__dict[self._savekey(key)] = val
 
     def __delitem__(self, key):
-        del self.__dict[self._delkey(key)]
+        canon = self.canonicalkey(key)
+        p = self.__preserves[canon]     # KeyError if key was no good
+        del self.__preserves[canon]
+        del self.__dict[p]
 
     def __iter__(self):
         return self.__dict.__iter__()
@@ -121,39 +122,14 @@ class FoldedDict(MutableMapping):
         # MutableMapping doesn't provide this?? huh.
         return self.__class__(self)
 
-    # The _preservedkey, _savekey, and _delkey methods abstract
-    # management of the preserved key. Generally, they don't
-    # need to be overridden and canonicalkey() suffices.
-    # But see, for example, CanonFolder, and DKFoldedDict
-    # for examples of what can be done overriding these methods.
-    def _preservedkey(self, key):
-        """Return the preservedkey for 'key' or raise KeyError."""
-        try:
-            return self.__preserves[self.canonicalkey(key)]
-        except AttributeError:
-            # Note that __preserves isn't initialized until the
-            # first time something is set, so this is just another
-            # form of "key not found" ... convert it to that.
-            raise KeyError(key) from None
-
     def _savekey(self, key):
         """Return the preservedkey if it exists, or set it (and return it)."""
         canon = self.canonicalkey(key)
         try:
             return self.__preserves[canon]
-        except AttributeError:
-            # this is where __preserves gets initialized (!)
-            self.__preserves = {canon: key}
         except KeyError:
             self.__preserves[canon] = key
         return key
-
-    def _delkey(self, key):
-        """Delete the preserved key (and return it!)."""
-        canon = self.canonicalkey(key)
-        p = self.__preserves[canon]
-        del self.__preserves[canon]
-        return p
 
 
 # this subclass uses the canonicalkey() as the preservedkey. This
@@ -162,10 +138,8 @@ class FoldedDict(MutableMapping):
 # would be important for the preservedkey value to be predictable/canonical
 # instead of preserving whatever form was first seen for each key.
 class CanonFolder(FoldedDict):
-    def _preservedkey(self, key):
-        return self.canonicalkey(key)
-    _savekey = _preservedkey
-    _delkey = _preservedkey
+    def _savekey(self, key):
+        return super()._savekey(self.canonicalkey(key))
 
 
 # In this variant, the most recent key used to SET an element is preserved.
