@@ -288,6 +288,12 @@ if __name__ == "__main__":
             xf = FoldedDict({'one': 1, 'three': 3}, TWO=2)
             self.assertTrue(xa == xc == xd == xe == xf == a)
 
+        def test_contains(self):
+            d = FoldedDict(banana='gram')
+            self.assertTrue('banana' in d)
+            self.assertTrue('BanANa' in d)
+            self.assertFalse('bozo' in d)
+
         def test_canonfolder(self):
             # the test-variations from init2 but now because of CanonFolder
             # semantics the xb test will also work.
